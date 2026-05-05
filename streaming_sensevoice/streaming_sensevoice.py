@@ -39,6 +39,9 @@ class StreamingSenseVoice:
         textnorm: bool = False,
         device: str = "cpu",
         model: str = "iic/SenseVoiceSmall",
+        enable_vad: bool = False,
+        vad_threshold: float = 0.5,
+        vad_min_silence_duration_ms: int = 550,
     ):
         """
         Args:
@@ -46,6 +49,12 @@ class StreamingSenseVoice:
             If not empty, then valid values are: auto, zh, en, ja, ko, yue
         textnorm:
             True to enable inverse text normalization; False to disable it.
+        enable_vad:
+            True to enable built-in VAD for automatic utterance segmentation.
+        vad_threshold:
+            VAD threshold (0.0-1.0), higher means more strict.
+        vad_min_silence_duration_ms:
+            Minimum silence duration in ms to trigger utterance end.
         """
         self.device = device
         self.model, kwargs = self.load_model(model=model, device=device)
@@ -85,6 +94,25 @@ class StreamingSenseVoice:
         self.caches_shape = (chunk_size + 2 * padding, kwargs["input_size"])
         self.caches = torch.zeros(self.caches_shape)
         self.zeros = np.zeros((1, kwargs["input_size"]), dtype=float)
+        
+        # Store all features for full-utterance emotion recognition
+        self.all_features = []
+        
+        # VAD support
+        self.enable_vad = enable_vad
+        self.vad_iterator = None
+        if enable_vad:
+            try:
+                from pysilero import VADIterator
+                self.vad_iterator = VADIterator(
+                    threshold=vad_threshold,
+                    min_silence_duration_ms=vad_min_silence_duration_ms,
+                )
+            except ImportError:
+                raise ImportError(
+                    "pysilero is required for VAD support. "
+                    "Install it with: pip install pysilero"
+                )
 
     @staticmethod
     def load_model(model: str, device: str) -> tuple:
@@ -101,6 +129,7 @@ class StreamingSenseVoice:
         self.decoder.reset()
         self.fbank = OnlineFbank(window_type="hamming")
         self.caches = torch.zeros(self.caches_shape)
+        self.all_features = []
 
     def get_size(self):
         effective_size = self.cur_idx + 1 - self.padding
@@ -108,7 +137,7 @@ class StreamingSenseVoice:
             return 0
         return effective_size % self.chunk_size or self.chunk_size
 
-    def inference(self, speech):
+    def inference(self, speech, return_full=False):
         speech = speech[None, :, :]
         speech_lengths = torch.tensor([speech.shape[1]])
         speech = speech.to(self.device)
@@ -116,6 +145,8 @@ class StreamingSenseVoice:
         speech = torch.cat((self.query, speech), dim=1)
         speech_lengths += 4
         encoder_out, _ = self.model.encoder(speech, speech_lengths)
+        if return_full:
+            return self.model.ctc.log_softmax(encoder_out)[0]
         return self.model.ctc.log_softmax(encoder_out)[0, 4:]
 
     def decode(self, times, tokens):
@@ -126,7 +157,40 @@ class StreamingSenseVoice:
             times_ms.append(step * 60)
         return times_ms, self.tokenizer.decode(tokens)
 
-    def streaming_inference(self, audio, is_last):
+    def streaming_inference(self, audio, is_last=None):
+        """
+        Streaming inference with optional VAD support.
+        
+        Args:
+            audio: Audio samples (int16 format, -32768 to 32767)
+            is_last: Whether this is the last chunk. If None and VAD is enabled,
+                    VAD will automatically determine utterance boundaries.
+        
+        Yields:
+            dict: Result containing 'text', 'timestamps', and optionally 'emotion'
+        """
+        # If VAD is enabled and is_last is not explicitly set, use VAD
+        if self.enable_vad and is_last is None:
+            # Convert audio to float32 for VAD (expects -1.0 to 1.0)
+            audio_float = np.array(audio, dtype=np.float32) / 32768.0
+            
+            for speech_dict, speech_samples in self.vad_iterator(audio_float):
+                if "start" in speech_dict:
+                    self.reset()
+                
+                vad_is_last = "end" in speech_dict
+                # Convert back to int16 for inference
+                speech_samples_int = (speech_samples * 32768).astype(np.int16).tolist()
+                
+                yield from self._streaming_inference_impl(speech_samples_int, vad_is_last)
+        else:
+            # Use explicit is_last parameter (backward compatible)
+            if is_last is None:
+                is_last = False
+            yield from self._streaming_inference_impl(audio, is_last)
+    
+    def _streaming_inference_impl(self, audio, is_last):
+        """Internal implementation of streaming inference."""
         self.fbank.accept_waveform(audio, is_last)
         features = self.fbank.get_lfr_frames(
             neg_mean=self.neg_mean, inv_stddev=self.inv_stddev
@@ -138,9 +202,15 @@ class StreamingSenseVoice:
             self.caches = torch.roll(self.caches, -1, dims=0)
             self.caches[-1, :] = feature
             self.cur_idx += 1
+            
+            # Store all features for full-utterance emotion recognition
+            self.all_features.append(feature)
+            
             cur_size = self.get_size()
             if cur_size != self.chunk_size and not is_last:
                 continue
+            
+            # Get encoder output for text decoding
             probs = self.inference(self.caches)[self.padding :]
             if cur_size != self.chunk_size:
                 probs = probs[self.chunk_size - cur_size :]
@@ -154,4 +224,26 @@ class StreamingSenseVoice:
             else:
                 res = self.decoder.ctc_greedy_search(probs, is_last=is_last)
                 times_ms, text = self.decode(res["times"], res["tokens"])
-            yield {"timestamps": times_ms, "text": text}
+            
+            # Extract emotion tag on the last chunk
+            result = {"timestamps": times_ms, "text": text}
+            if is_last and len(self.all_features) > 0:
+                # Use ALL accumulated features for emotion recognition
+                all_features_tensor = torch.stack(self.all_features)
+                full_encoder_out = self.inference(all_features_tensor, return_full=True)
+                # Get emotion from position 2 (0: language, 1: event, 2: emotion, 3: textnorm)
+                emotion_probs = full_encoder_out[2, :]
+                emotion_token = emotion_probs.argmax().item()
+                
+                # Map emotion token ID to emotion label
+                emotion_map = {
+                    25009: "unk",
+                    25001: "happy",
+                    25002: "sad",
+                    25003: "angry",
+                    25004: "neutral",
+                }
+                emotion = emotion_map.get(emotion_token, "unk")
+                result["emotion"] = emotion
+            
+            yield result

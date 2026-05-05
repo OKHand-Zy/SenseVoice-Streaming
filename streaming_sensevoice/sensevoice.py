@@ -1,23 +1,23 @@
 import time
-import torch
-from torch import nn
-import torch.nn.functional as F
 from typing import Iterable, Optional
 
-from funasr.register import tables
-from funasr.models.ctc.ctc import CTC
-from funasr.utils.datadir_writer import DatadirWriter
-from funasr.models.paraformer.search import Hypothesis
-from funasr.train_utils.device_funcs import force_gatherable
+import torch
+import torch.nn.functional as F
 from funasr.losses.label_smoothing_loss import LabelSmoothingLoss
 from funasr.metrics.compute_acc import compute_accuracy, th_accuracy
-from funasr.utils.load_utils import load_audio_text_image_video, extract_fbank
+from funasr.models.ctc.ctc import CTC
+from funasr.models.paraformer.search import Hypothesis
+from funasr.register import tables
+from funasr.train_utils.device_funcs import force_gatherable
+from funasr.utils.datadir_writer import DatadirWriter
+from funasr.utils.load_utils import extract_fbank, load_audio_text_image_video
+from torch import nn
 
 
 class SinusoidalPositionEncoder(torch.nn.Module):
     """ """
 
-    def __int__(self, d_model=80, dropout_rate=0.1):
+    def __init__(self, d_model=80, dropout_rate=0.1):
         pass
 
     def encode(
@@ -29,18 +29,23 @@ class SinusoidalPositionEncoder(torch.nn.Module):
         batch_size = positions.size(0)
         positions = positions.type(dtype)
         device = positions.device
+
         log_timescale_increment = torch.log(
             torch.tensor([10000], dtype=dtype, device=device)
         ) / (depth / 2 - 1)
+
         inv_timescales = torch.exp(
             torch.arange(depth / 2, device=device).type(dtype)
             * (-log_timescale_increment)
         )
         inv_timescales = torch.reshape(inv_timescales, [batch_size, -1])
+
         scaled_time = torch.reshape(positions, [1, -1, 1]) * torch.reshape(
             inv_timescales, [1, 1, -1]
         )
+
         encoding = torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=2)
+
         return encoding.type(dtype)
 
     def forward(self, x):
@@ -115,11 +120,13 @@ class MultiHeadedAttentionSANM(nn.Module):
         self.fsmn_block = nn.Conv1d(
             n_feat, n_feat, kernel_size, stride=1, padding=0, groups=n_feat, bias=False
         )
+
         # padding
         left_padding = (kernel_size - 1) // 2
         if sanm_shfit > 0:
             left_padding = left_padding + sanm_shfit
         right_padding = kernel_size - 1 - left_padding
+
         self.pad_fn = nn.ConstantPad1d((left_padding, right_padding), 0.0)
 
     def forward_fsmn(self, inputs, mask, mask_shfit_chunk=None):
@@ -157,6 +164,7 @@ class MultiHeadedAttentionSANM(nn.Module):
         b, t, d = x.size()
         q_k_v = self.linear_q_k_v(x)
         q, k, v = torch.split(q_k_v, int(self.h * self.d_k), dim=-1)
+
         q_h = torch.reshape(q, (b, t, self.h, self.d_k)).transpose(
             1, 2
         )  # (batch, head, time1, d_k)
@@ -247,6 +255,7 @@ class MultiHeadedAttentionSANM(nn.Module):
             if cache is not None:
                 k_h_stride = k_h[:, :, : -(chunk_size[2]), :]
                 v_h_stride = v_h[:, :, : -(chunk_size[2]), :]
+
                 k_h = torch.cat((cache["k"], k_h), dim=2)
                 v_h = torch.cat((cache["v"], v_h), dim=2)
 
