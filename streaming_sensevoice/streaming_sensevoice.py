@@ -257,10 +257,10 @@ class StreamingSenseVoice:
                         25004: "neutral",
                     }
                     emotion = emotion_map.get(emotion_token, "unk")
-                    print(f"[DEBUG] Emotion token: {emotion_token}, Emotion: {emotion}")
+                    #print(f"[DEBUG] Emotion token: {emotion_token}, Emotion: {emotion}")
                     result["emotion"] = emotion
                 else:
-                    print(f"[DEBUG] Token sequence too short: {len(token_int)}")
+                    #print(f"[DEBUG] Token sequence too short: {len(token_int)}")
                     result["emotion"] = "unk"
             
             yield result

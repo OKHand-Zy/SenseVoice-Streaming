@@ -22,14 +22,25 @@ def main():
     model = StreamingSenseVoice(contexts=contexts)
 
     samples, sr = sf.read("data/test_16k.wav")
-    samples = (samples * 32768).tolist() * 3
+    samples = (samples * 32768).tolist()
+
+    print("=" * 70)
+    print("Processing audio file: data/test_16k.wav")
+    print("=" * 70)
+    print()
 
     step = int(0.1 * sr)
     for i in range(0, len(samples), step):
         is_last = i + step >= len(samples)
         for res in model.streaming_inference(samples[i : i + step], is_last):
-            print(res["timestamps"])
-            print(res["text"])
+            if res["text"]:
+                print(f"Text: {res['text']}")
+                print(f"Timestamps: {res['timestamps']}")
+            
+            # Display emotion tag when available (only on is_last=True)
+            if "emotion" in res:
+                print(f"Emotion: {res['emotion']}")
+                print("-" * 70)
 
 
 if __name__ == "__main__":
