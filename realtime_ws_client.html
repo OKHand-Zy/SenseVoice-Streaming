@@ -48,6 +48,47 @@
         font-size: 12px;
       }
 
+      .transEmotion {
+        grid-column-start: 2;
+        grid-column-end: 3;
+        grid-row-start: 3;
+        grid-row-end: 3;
+        padding: 0px 5px;
+        font-size: 12px;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .emotionTag {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 600;
+        color: white;
+      }
+
+      .emotion-happy {
+        background-color: #4caf50;
+      }
+
+      .emotion-sad {
+        background-color: #2196f3;
+      }
+
+      .emotion-angry {
+        background-color: #f44336;
+      }
+
+      .emotion-neutral {
+        background-color: #9e9e9e;
+      }
+
+      .emotion-unk {
+        background-color: #607d8b;
+      }
+
       .transId {
         padding: 2px;
         border-radius: 10px;
@@ -203,6 +244,32 @@
           );
           timeEle.classList.add("transTime");
           root.appendChild(timeEle);
+
+          // Add emotion tag if available
+          if (transcription.data.emotion) {
+            const emotionEle = document.createElement("div");
+            emotionEle.classList.add("transEmotion");
+            
+            const emotionLabel = document.createElement("span");
+            emotionLabel.textContent = "情緒:";
+            emotionEle.appendChild(emotionLabel);
+            
+            const emotionTag = document.createElement("span");
+            emotionTag.classList.add("emotionTag", `emotion-${transcription.data.emotion}`);
+            
+            // Emotion label mapping
+            const emotionLabels = {
+              'happy': '😊 開心',
+              'sad': '😢 悲傷',
+              'angry': '😠 生氣',
+              'neutral': '😐 中性',
+              'unk': '❓ 未知'
+            };
+            emotionTag.textContent = emotionLabels[transcription.data.emotion] || transcription.data.emotion;
+            emotionEle.appendChild(emotionTag);
+            
+            root.appendChild(emotionEle);
+          }
         } else {
           const idEle = document.createElement("div");
           idEle.appendChild(document.createTextNode(transcription.id));

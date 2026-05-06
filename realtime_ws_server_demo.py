@@ -94,6 +94,7 @@ class TranscriptionChunk(BaseModel):
     raw_text: str
     final_text: str | None = None
     spk_id: int | None = None
+    emotion: str | None = None  # Emotion tag: happy, sad, angry, neutral, unk
 
 
 class TranscriptionResponse(BaseModel):
@@ -205,12 +206,17 @@ async def websocket_endpoint(websocket: WebSocket):
                             asrDetected = True
 
                         if asrDetected:
+                            # Extract emotion if available (only on is_last=True)
+                            emotion = res.get("emotion", None)
+                            
                             transcription_response = TranscriptionResponse(
                                 id=speech_count,
                                 begin_at=currentAudioBeginTime,
                                 end_at=None,
                                 data=TranscriptionChunk(
-                                    timestamps=res["timestamps"], raw_text=res["text"]
+                                    timestamps=res["timestamps"],
+                                    raw_text=res["text"],
+                                    emotion=emotion,  # Add emotion tag
                                 ),
                                 is_final=False,
                                 session_id=session_id,
