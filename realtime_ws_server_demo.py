@@ -238,8 +238,9 @@ async def websocket_endpoint(websocket: WebSocket):
                             await websocket.send_json(
                                 transcription_response.model_dump()
                             )
+                            emotion_info = f" [Emotion: {transcription_response.data.emotion}]" if transcription_response.data.emotion else ""
                             logger.debug(
-                                f"{speech_count}: VAD end: {speech_dict['end'] / config.SAMPLERATE}\n{transcription_response.data.raw_text}\n{str(transcription_response.data.timestamps)}"
+                                f"{speech_count}: VAD end: {speech_dict['end'] / config.SAMPLERATE}\n{transcription_response.data.raw_text}{emotion_info}\n{str(transcription_response.data.timestamps)}"
                             )
                         else:
                             logger.debug(

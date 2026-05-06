@@ -197,7 +197,7 @@ class StreamingSenseVoice:
         )
         if is_last and len(features) == 0:
             features = self.zeros
-        for idx, feature in enumerate(torch.unbind(torch.tensor(features), dim=0)):
+        for idx, feature in enumerate(torch.unbind(torch.tensor(features, dtype=torch.float32), dim=0)):
             is_last = is_last and idx == features.shape[0] - 1
             self.caches = torch.roll(self.caches, -1, dims=0)
             self.caches[-1, :] = feature
@@ -231,19 +231,36 @@ class StreamingSenseVoice:
                 # Use ALL accumulated features for emotion recognition
                 all_features_tensor = torch.stack(self.all_features)
                 full_encoder_out = self.inference(all_features_tensor, return_full=True)
-                # Get emotion from position 2 (0: language, 1: event, 2: emotion, 3: textnorm)
-                emotion_probs = full_encoder_out[2, :]
-                emotion_token = emotion_probs.argmax().item()
                 
-                # Map emotion token ID to emotion label
-                emotion_map = {
-                    25009: "unk",
-                    25001: "happy",
-                    25002: "sad",
-                    25003: "angry",
-                    25004: "neutral",
-                }
-                emotion = emotion_map.get(emotion_token, "unk")
-                result["emotion"] = emotion
+                # Decode the full sequence to get emotion token
+                # The first 4 tokens are: [language, emotion, event, textnorm]
+                full_probs = full_encoder_out
+                yseq = full_probs.argmax(dim=-1)
+                yseq = torch.unique_consecutive(yseq, dim=-1)
+                
+                # Remove blank tokens
+                mask = yseq != 0  # 0 is blank_id
+                token_int = yseq[mask].tolist()
+                
+                print(f"[DEBUG] Full token sequence (first 10): {token_int[:10]}")
+                
+                # Extract emotion from position 1 (0: language, 1: emotion, 2: event, 3: textnorm)
+                if len(token_int) > 1:
+                    emotion_token = token_int[1]
+                    
+                    # Map emotion token ID to emotion label
+                    emotion_map = {
+                        25009: "unk",
+                        25001: "happy",
+                        25002: "sad",
+                        25003: "angry",
+                        25004: "neutral",
+                    }
+                    emotion = emotion_map.get(emotion_token, "unk")
+                    print(f"[DEBUG] Emotion token: {emotion_token}, Emotion: {emotion}")
+                    result["emotion"] = emotion
+                else:
+                    print(f"[DEBUG] Token sequence too short: {len(token_int)}")
+                    result["emotion"] = "unk"
             
             yield result
